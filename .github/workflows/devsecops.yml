@@ -1,0 +1,80 @@
+name: 🚀 Secure DevSecOps Pipeline
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    # 1. Node.js setup
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    # 2. SAST (CodeQL)
+    - name: 🛡️ SAST - CodeQL
+      uses: github/codeql-action/analyze@v3
+
+    # 3. Secrets scan
+    - name: 🔑 Secrets Scan
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.repository.default_branch }}
+        head: HEAD
+        extra_args: --exclude-paths .trufflehog-ignore.txt
+
+    # 4. SCA (npm audit)
+    - name: 📦 SCA - npm audit
+      run: |
+        npm ci
+        npm audit --audit-level=high
+
+    # 5. SAST (Semgrep)
+    - name: 🔍 SAST - Semgrep
+      uses: returntocorp/semgrep-action@v1
+      with:
+        config: >-
+          p/security
+          p/secrets
+
+    # 6. Build & Container Security
+    - name: 🐳 Docker Build & Trivy
+      run: |
+        docker build -t demo-app .
+        docker run --rm demo-app curl -f localhost:3000 || exit 1
+        # Your container checklist!
+        docker run --rm aquasec/trivy:latest image \
+          --severity HIGH,CRITICAL \
+          --exit-code 1 \
+          --no-progress demo-app
+
+    # 7. IaC (if added later)
+    - name: ☁️ IaC Scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+  deploy:
+    needs: security
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: 🚀 Deploy Success
+      run: |
+        echo "✅ All security gates PASSED!"
+        echo "🎉 Ready for production deploy"
